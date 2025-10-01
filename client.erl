@@ -26,23 +26,45 @@ initial_state(Nick, GUIAtom, ServerAtom) ->
 %   - Data is what is sent to GUI, either the atom `ok` or a tuple {error, Atom, "Error message"}
 %   - NewState is the updated state of the client
 
-% Join channel
-handle(St, {join, Channel}) ->
-    % TODO: Implement this function
-    % {reply, ok, St} ;
-    {reply, {error, not_implemented, "join not implemented"}, St} ;
+
+handle(St = #client_st{server = Server, nick = Nick}, {join, Channel}) ->
+    Ref = make_ref(),
+    Server ! {request, self(), Ref, {join, Nick, Channel}},
+    receive
+        {result, Ref, ok} ->
+            {reply, ok, St};
+        {result, Ref, {error, Atom, Msg}} ->
+            {reply, {error, Atom, Msg}, St}
+    after 1000 ->
+        {reply, {error, server_not_reached, "Server not responding"}, St}
+    end;
+
 
 % Leave channel
-handle(St, {leave, Channel}) ->
-    % TODO: Implement this function
-    % {reply, ok, St} ;
-    {reply, {error, not_implemented, "leave not implemented"}, St} ;
+handle(St = #client_st{server = Server, nick = Nick}, {leave, Channel}) ->
+    Ref = make_ref(),
+    Server ! {request, self(), Ref, {leave, Nick, Channel}},
+    receive
+        {result, Ref, ok} ->
+            {reply, ok, St};
+        {result, Ref, {error, Atom, Msg}} ->
+            {reply, {error, Atom, Msg}, St}
+    after 1000 ->
+        {reply, {error, server_not_reached, "Server not responding"}, St}
+    end;
 
 % Sending message (from GUI, to channel)
-handle(St, {message_send, Channel, Msg}) ->
-    % TODO: Implement this function
-    % {reply, ok, St} ;
-    {reply, {error, not_implemented, "message sending not implemented"}, St} ;
+handle(St = #client_st{server = Server, nick = Nick}, {message_send, Channel, Msg}) ->
+    Ref = make_ref(),
+    Server ! {request, self(), Ref, {message_send, Nick, Channel, Msg}},
+    receive
+        {result, Ref, ok} ->
+            {reply, ok, St};
+        {result, Ref, {error, Atom, Text}} ->
+            {reply, {error, Atom, Text}, St}
+    after 1000 ->
+        {reply, {error, server_not_reached, "Server not responding"}, St}
+    end;
 
 % This case is only relevant for the distinction assignment!
 % Change nick (no check, local only)
