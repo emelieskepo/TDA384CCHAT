@@ -30,7 +30,8 @@ initial_state(Nick, GUIAtom, ServerAtom) ->
 handle(St, {join, Channel}) ->
     Server = St#client_st.server,
     % Sends a join request to the server and catches all responses
-    Result = (catch genserver:request(Server, {join, self(), Channel})),
+    %  <-- ändrat: skickar också med klientens nick, så servern vet vilka nicks som är upptagna
+    Result = (catch genserver:request(Server, {join, self(), Channel, St#client_st.nick})),
     case Result of
         {'EXIT',_}    -> {reply, {error, server_not_reached, "Server does not respond"}, St}; % when server has been stopped
         timeout_error -> {reply, {error, server_not_reached, "Server does not respond"}, St}; % when the server has timed out / unresponsive
@@ -42,7 +43,6 @@ handle(St, {leave, Channel}) ->
     % Sends a leave request to the channel's process
     Result = genserver:request(list_to_atom(Channel), {leave, self()}),
     {reply, Result, St};
-
 
 % Sending message (from GUI, to channel)
 handle(St, {message_send, Channel, Msg}) ->
@@ -58,7 +58,21 @@ handle(St, {message_send, Channel, Msg}) ->
 % This case is only relevant for the distinction assignment!
 % Change nick (no check, local only)
 handle(St, {nick, NewNick}) ->
-    {reply, ok, St#client_st{nick = NewNick}} ;
+    Server = St#client_st.server,
+    % Försök först med servern som står i state
+    Result1 = (catch genserver:request(Server, {nick, self(), NewNick})),
+    Result = case Result1 of
+                 {'EXIT', _}    -> (catch genserver:request(server, {nick, self(), NewNick})); % fallback
+                 timeout_error  -> (catch genserver:request(server, {nick, self(), NewNick}));
+                 _ -> Result1
+             end,
+    case Result of
+        {'EXIT',_}    -> {reply, {error, server_not_reached, "Server does not respond"}, St};
+        timeout_error -> {reply, {error, server_not_reached, "Server does not respond"}, St};
+        ok            -> {reply, ok, St#client_st{nick = NewNick}};
+        _Else         -> {reply, Result, St}
+    end;
+
 
 % ---------------------------------------------------------------------------
 % The cases below do not need to be changed...

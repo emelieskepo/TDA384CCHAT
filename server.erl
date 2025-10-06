@@ -18,7 +18,6 @@ new_server(ServerAtom) ->
         nicknames = []
     }.
 
-
 new_channel(Channel, MemberPid) ->
     #channel_state{
         name = Channel,
@@ -44,9 +43,8 @@ stop(ServerAtom) ->
 %   - Data is what is sent to the Client
 %   - NewState is the updated state of the server
 
-
 % This one handles all join requests.
-handle_server(State, {join, Client, Channel}) ->
+handle_server(State, {join, Client, Channel, Nick}) ->
     Channels = State#server_state.channels,
     % Checks if the channel exists already.
     case lists:member(Channel, Channels) of
@@ -55,12 +53,54 @@ handle_server(State, {join, Client, Channel}) ->
             % Sends request to the channel to join it.
             Result = (catch genserver:request(list_to_atom(Channel), {join, Client})),
             % Sends response that user successfully joined channel
-            {reply, Result, State};
+            case Result of
+                ok ->
+                    % lägg till nicket i serverns lista om det inte redan finns
+                    NewNickList =
+                        case lists:keymember(Nick, 1, State#server_state.nicknames) of
+                            true -> State#server_state.nicknames;
+                            false -> State#server_state.nicknames ++ [{Nick, Client}]
+                        end,
+                    {reply, Result, State#server_state{nicknames = NewNickList}};
+                _ ->
+                    {reply, Result, State}
+            end;
         false ->
             % Initiates channel and spawns process for it.
             spawn(genserver, start, [list_to_atom(Channel), new_channel(Channel, Client), fun handle_channel/2]),
             % Sends response that user successfully joined channel
-            {reply, ok, State#server_state{channels = Channels ++ [Channel]}}
+            NickList = State#server_state.nicknames,
+            NewNickList = case lists:member(Nick, NickList) of
+                              true -> NickList;
+                              false -> NickList ++ [Nick]
+                          end,
+            {reply, ok, State#server_state{channels = Channels ++ [Channel], nicknames = NewNickList}}
+    end;
+
+handle_server(State, {nick, Client, NewNick}) ->
+    NickList = State#server_state.nicknames,
+
+    % se om NewNick redan används
+    case lists:keyfind(NewNick, 1, NickList) of
+        {NewNick, Owner} when Owner =:= Client ->
+            % klienten försöker byta till samma nick -> ok
+            {reply, ok, State};
+
+        {NewNick, _OtherClient} ->
+            % någon annan har den -> error
+            {reply, {error, nick_taken, "Nick already taken"}, State};
+
+        false ->
+            % hitta gamla nicken
+            OldEntry = lists:keyfind(Client, 2, NickList),
+            CleanList =
+                case OldEntry of
+                    {OldNick, _} -> lists:keydelete(OldNick, 1, NickList);
+                    false -> NickList
+                end,
+            % lägg till nya nicken
+            NewList = CleanList ++ [{NewNick, Client}],
+            {reply, ok, State#server_state{nicknames = NewList}}
     end;
 
 % Handles request to kill all channels (sent upon shutdown)
