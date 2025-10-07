@@ -29,50 +29,26 @@ initial_state(Nick, GUIAtom, ServerAtom) ->
 % Join channel
 handle(St, {join, Channel}) ->
     Server = St#client_st.server,
-    % Sends a join request to the server and catches all responses
-    %  <-- ändrat: skickar också med klientens nick, så servern vet vilka nicks som är upptagna
-    Result = (catch genserver:request(Server, {join, self(), Channel, St#client_st.nick})),
-    case Result of
-        {'EXIT',_}    -> {reply, {error, server_not_reached, "Server does not respond"}, St}; % when server has been stopped
-        timeout_error -> {reply, {error, server_not_reached, "Server does not respond"}, St}; % when the server has timed out / unresponsive
-        _Else         -> {reply, Result, St} % is either {reply, ok, _} or {reply, {error...} _}.
-    end;
+    Result = catch genserver:request(Server, {join, self(), Channel, St#client_st.nick}),
+    {reply, normalize_result(Result), St};
 
 % Leave channel
 handle(St, {leave, Channel}) ->
-    % Sends a leave request to the channel's process
-    Result = genserver:request(list_to_atom(Channel), {leave, self()}),
-    {reply, Result, St};
+    {reply, genserver:request(list_to_atom(Channel), {leave, self()}), St};
 
 % Sending message (from GUI, to channel)
 handle(St, {message_send, Channel, Msg}) ->
-    % Sends a message_send request to the channel's process, along with the message, nick of the sender, and the sender itself
-    Result = (catch genserver:request(list_to_atom(Channel), {message_send, Msg, St#client_st.nick, self()})),
-    case Result of
-        % Server has been shut down/exited, and the channel therefore doesn't exist
-        {'EXIT', _} -> {reply, {error, server_not_reached, "Server does not respond"}, St};
-        % Either ok or an error that has been caught in server
-        _Else       -> {reply, Result, St}
-    end;
+    Result = catch genserver:request(list_to_atom(Channel), {message_send, Msg, St#client_st.nick, self()}),
+    {reply, normalize_result(Result), St};
 
-% This case is only relevant for the distinction assignment!
-% Change nick (no check, local only)
+%Change nick
 handle(St, {nick, NewNick}) ->
     Server = St#client_st.server,
-    % Försök först med servern som står i state
-    Result1 = (catch genserver:request(Server, {nick, self(), NewNick})),
-    Result = case Result1 of
-                 {'EXIT', _}    -> (catch genserver:request(server, {nick, self(), NewNick})); % fallback
-                 timeout_error  -> (catch genserver:request(server, {nick, self(), NewNick}));
-                 _ -> Result1
-             end,
+    Result = try_request(Server, {nick, self(), NewNick}),
     case Result of
-        {'EXIT',_}    -> {reply, {error, server_not_reached, "Server does not respond"}, St};
-        timeout_error -> {reply, {error, server_not_reached, "Server does not respond"}, St};
-        ok            -> {reply, ok, St#client_st{nick = NewNick}};
-        _Else         -> {reply, Result, St}
+        ok -> {reply, ok, St#client_st{nick = NewNick}};
+        _  -> {reply, normalize_result(Result), St}
     end;
-
 
 % ---------------------------------------------------------------------------
 % The cases below do not need to be changed...
@@ -95,3 +71,22 @@ handle(St, quit) ->
 % Catch-all for any unhandled requests
 handle(St, Data) ->
     {reply, {error, not_implemented, "Client does not handle this command"}, St} .
+
+
+%Help functions
+
+%Simplifies error messages
+normalize_result({'EXIT', _}) ->
+    {error, server_not_reached, "Server does not respond"};
+normalize_result(timeout_error) ->
+    {error, server_not_reached, "Server does not respond"};
+normalize_result(Result) ->
+    Result.
+
+%Attempts to send a request to the given server
+try_request(Server, Request) ->
+    case catch genserver:request(Server, Request) of
+        {'EXIT', _} -> catch genserver:request(server, Request);
+        timeout_error -> catch genserver:request(server, Request);
+        Result -> Result
+    end.
